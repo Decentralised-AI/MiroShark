@@ -142,7 +142,7 @@ Open `http://localhost:3000`.
 
 ### Recommended Models (OpenRouter)
 
-Simulation runs hundreds of LLM calls (once per agent per turn). Pick a model that balances cost and quality:
+Simulation runs hundreds of LLM calls (once per agent per turn). A typical detailed simulation is ~40 turns with 100+ agents. Pick a model that balances cost and quality:
 
 | Model | ID | ~Cost/sim | Notes |
 |---|---|---|---|
