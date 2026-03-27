@@ -87,7 +87,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Layout State
-const viewMode = ref('workbench') // graph | split | workbench
+const viewMode = ref('split') // graph | split | workbench
 
 // Step State
 const currentStep = ref(1) // 1: Graph Construction, 2: Agent Setup, 3: Start Simulation, 4: Report Generation, 5: Deep Interaction
@@ -405,24 +405,45 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Hyperstitions Design System v2.0 — Local Tokens */
+.main-view {
+  --color-orange: #FF6B1A;
+  --color-green: #43C165;
+  --color-black: #0A0A0A;
+  --color-white: #FAFAFA;
+  --color-gray: #F5F5F5;
+  --color-red: #FF4444;
+  --color-amber: #FFB347;
+  --font-display: 'Young Serif', Georgia, serif;
+  --font-mono: 'Space Mono', 'Courier New', monospace;
+  --border-light: 2px solid rgba(10,10,10,0.08);
+  --border-medium: 2px solid rgba(10,10,10,0.12);
+  --space-xs: 6px;
+  --space-sm: 11px;
+  --space-md: 22px;
+  --space-lg: 34px;
+  --space-xl: 56px;
+}
+
 .main-view {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #FFF;
+  background: var(--color-white);
   overflow: hidden;
-  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 /* Header */
 .app-header {
   height: 60px;
-  border-bottom: 1px solid #EAEAEA;
+  border-bottom: var(--border-medium);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  background: #FFF;
+  padding: 0 var(--space-md);
+  background: var(--color-black);
+  color: var(--color-white);
   z-index: 100;
   position: relative;
 }
@@ -434,46 +455,52 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 800;
   font-size: 18px;
-  letter-spacing: 1px;
+  letter-spacing: 3px;
   cursor: pointer;
+  text-transform: uppercase;
+  color: var(--color-white);
 }
 
 .view-switcher {
   display: flex;
-  background: #F5F5F5;
+  background: rgba(255,255,255,0.08);
   padding: 4px;
-  border-radius: 6px;
   gap: 4px;
 }
 
 .switch-btn {
   border: none;
   background: transparent;
-  padding: 6px 16px;
-  font-size: 12px;
+  padding: var(--space-xs) 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-weight: 600;
-  color: #666;
-  border-radius: 4px;
+  color: rgba(250,250,250,0.5);
+  text-transform: uppercase;
+  letter-spacing: 3px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .switch-btn.active {
-  background: #FFF;
-  color: #000;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  background: var(--color-white);
+  color: var(--color-black);
+  border: var(--border-light);
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  color: #666;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: rgba(250,250,250,0.5);
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 3px;
 }
 
 .header-right {
@@ -490,32 +517,31 @@ onUnmounted(() => {
 }
 
 .step-num {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
-  color: #999;
+  color: rgba(250,250,250,0.4);
 }
 
 .step-name {
   font-weight: 700;
-  color: #000;
+  color: var(--color-white);
 }
 
 .step-divider {
   width: 1px;
   height: 14px;
-  background-color: #E0E0E0;
+  background-color: rgba(250,250,250,0.2);
 }
 
 .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
-  background: #CCC;
+  background: rgba(250,250,250,0.2);
 }
 
-.status-indicator.processing .dot { background: #FF5722; animation: pulse 1s infinite; }
-.status-indicator.completed .dot { background: #4CAF50; }
-.status-indicator.error .dot { background: #F44336; }
+.status-indicator.processing .dot { background: var(--color-orange); animation: pulse 1s infinite; }
+.status-indicator.completed .dot { background: var(--color-green); }
+.status-indicator.error .dot { background: var(--color-red); }
 
 @keyframes pulse { 50% { opacity: 0.5; } }
 
@@ -535,6 +561,6 @@ onUnmounted(() => {
 }
 
 .panel-wrapper.left {
-  border-right: 1px solid #EAEAEA;
+  border-right: var(--border-light);
 }
 </style>

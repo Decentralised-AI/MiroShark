@@ -218,20 +218,20 @@ onMounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #FFF;
+  background: #FAFAFA;
   overflow: hidden;
-  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 /* Header */
 .app-header {
   height: 60px;
-  border-bottom: 1px solid #EAEAEA;
+  border-bottom: 2px solid rgba(10,10,10,0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  background: #FFF;
+  padding: 0 22px;
+  background: #0A0A0A;
   z-index: 100;
   position: relative;
 }
@@ -243,37 +243,40 @@ onMounted(() => {
 }
 
 .brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 800;
   font-size: 18px;
-  letter-spacing: 1px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
   cursor: pointer;
+  color: #FAFAFA;
 }
 
 .view-switcher {
   display: flex;
-  background: #F5F5F5;
+  background: rgba(250,250,250,0.08);
   padding: 4px;
-  border-radius: 6px;
   gap: 4px;
 }
 
 .switch-btn {
-  border: none;
+  border: 2px solid transparent;
   background: transparent;
   padding: 6px 16px;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 600;
-  color: #666;
-  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: rgba(250,250,250,0.5);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .switch-btn.active {
-  background: #FFF;
-  color: #000;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  background: #0A0A0A;
+  color: #FAFAFA;
+  border: 2px solid #FF6B1A;
 }
 
 .header-right {
@@ -290,28 +293,31 @@ onMounted(() => {
 }
 
 .step-num {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
-  color: #999;
+  color: rgba(250,250,250,0.4);
 }
 
 .step-name {
   font-weight: 700;
-  color: #000;
+  color: #FAFAFA;
 }
 
 .step-divider {
   width: 1px;
   height: 14px;
-  background-color: #E0E0E0;
+  background-color: rgba(250,250,250,0.12);
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  color: #666;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: rgba(250,250,250,0.5);
   font-weight: 500;
 }
 
@@ -319,13 +325,13 @@ onMounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #CCC;
+  background: rgba(250,250,250,0.2);
 }
 
-.status-indicator.ready .dot { background: #4CAF50; }
-.status-indicator.processing .dot { background: #FF9800; animation: pulse 1s infinite; }
-.status-indicator.completed .dot { background: #4CAF50; }
-.status-indicator.error .dot { background: #F44336; }
+.status-indicator.ready .dot { background: #43C165; }
+.status-indicator.processing .dot { background: #FF6B1A; animation: pulse 1s infinite; }
+.status-indicator.completed .dot { background: #43C165; }
+.status-indicator.error .dot { background: #FF4444; }
 
 @keyframes pulse { 50% { opacity: 0.5; } }
 
@@ -345,6 +351,6 @@ onMounted(() => {
 }
 
 .panel-wrapper.left {
-  border-right: 1px solid #EAEAEA;
+  border-right: 2px solid rgba(10,10,10,0.08);
 }
 </style>
