@@ -61,6 +61,50 @@
             Combines context to automatically invoke tools, organize entities and relationships from the knowledge graph, initialize simulated individuals, and assign them unique behaviors and memories based on reality seeds
           </p>
 
+          <!-- Import mode toggle (only shown before preparation starts) -->
+          <div v-if="phase === 1 && profiles.length === 0 && !importLoading" class="import-toggle-row">
+            <label class="switch-control">
+              <input type="checkbox" v-model="importMode">
+              <span class="switch-track"></span>
+              <span class="switch-label">{{ importMode ? 'Import Custom Agents' : 'Auto-generate from Graph' }}</span>
+            </label>
+            <button v-if="!importMode" class="template-link" @click="handleDownloadTemplate">↓ CSV Template</button>
+          </div>
+
+          <!-- File upload area (import mode) -->
+          <div v-if="importMode && phase === 1 && !importCount" class="import-upload-area">
+            <div
+              class="drop-zone"
+              :class="{ 'drag-over': importDragOver, 'has-file': importFile }"
+              @dragover.prevent="importDragOver = true"
+              @dragleave="importDragOver = false"
+              @drop.prevent="onImportDrop"
+            >
+              <template v-if="importFile">
+                <span class="drop-filename">{{ importFile.name }}</span>
+                <span class="drop-filesize">{{ (importFile.size / 1024).toFixed(1) }} KB</span>
+              </template>
+              <template v-else>
+                <span class="drop-hint">Drop CSV or JSON here, or</span>
+                <label class="drop-browse">
+                  browse
+                  <input type="file" accept=".csv,.json" @change="onImportFileSelect" style="display:none">
+                </label>
+              </template>
+            </div>
+            <p v-if="importError" class="import-error">{{ importError }}</p>
+            <div class="import-actions">
+              <button class="action-btn primary" :disabled="!importFile || importLoading" @click="handleImportAndPrepare">
+                {{ importLoading ? 'Uploading...' : 'Import & Continue →' }}
+              </button>
+              <button class="template-link" @click="handleDownloadTemplate">↓ Download CSV Template</button>
+            </div>
+            <p class="import-format-hint">
+              Required CSV columns: <code>name, username, bio, persona</code>
+              — Optional: <code>age, gender, mbti, country, profession, interested_topics</code>
+            </p>
+          </div>
+
           <!-- Profiles Stats -->
           <div v-if="profiles.length > 0" class="stats-grid">
             <div class="stat-card">
@@ -670,7 +714,9 @@ import {
   getSimulationProfilesRealtime,
   getSimulationConfig,
   getSimulationConfigRealtime,
-  getRunStatus
+  getRunStatus,
+  importAgents,
+  downloadAgentTemplate
 } from '../api/simulation'
 
 const props = defineProps({
@@ -694,6 +740,14 @@ const expectedTotal = ref(null)
 const simulationConfig = ref(null)
 const selectedProfile = ref(null)
 const showProfilesDetail = ref(true)
+
+// Import mode state
+const importMode = ref(false)         // true = use file upload instead of graph generation
+const importFile = ref(null)          // selected File object
+const importDragOver = ref(false)     // drag-over highlight
+const importLoading = ref(false)      // uploading in progress
+const importError = ref('')           // validation / upload error
+const importCount = ref(0)            // number of agents successfully imported
 
 // Log deduplication: track last logged key info
 let lastLoggedMessage = ''
@@ -805,6 +859,75 @@ const selectProfile = (profile) => {
   selectedProfile.value = profile
 }
 
+// ── Import mode helpers ──
+
+const onImportFileSelect = (event) => {
+  const file = event.target.files[0]
+  if (file) setImportFile(file)
+}
+
+const onImportDrop = (event) => {
+  importDragOver.value = false
+  const file = event.dataTransfer.files[0]
+  if (file) setImportFile(file)
+}
+
+const setImportFile = (file) => {
+  const allowed = ['.csv', '.json']
+  const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  if (!allowed.includes(ext)) {
+    importError.value = 'Only .csv and .json files are supported.'
+    return
+  }
+  importFile.value = file
+  importError.value = ''
+}
+
+const handleImportAndPrepare = async () => {
+  if (!importFile.value) {
+    importError.value = 'Please select a CSV or JSON file first.'
+    return
+  }
+  importLoading.value = true
+  importError.value = ''
+  try {
+    addLog(`Uploading ${importFile.value.name}...`)
+    const res = await importAgents(props.simulationId, importFile.value)
+    if (!res.success) {
+      importError.value = res.error || 'Import failed.'
+      addLog(`✗ Import failed: ${res.error}`)
+      importLoading.value = false
+      return
+    }
+    importCount.value = res.data.count
+    if (res.data.warnings?.length) {
+      res.data.warnings.forEach(w => addLog(`⚠ ${w}`))
+    }
+    addLog(`✓ Imported ${res.data.count} agent personas`)
+    // Proceed to config generation (skip profile generation in /prepare)
+    await startPrepareSimulation()
+  } catch (err) {
+    importError.value = err.message || 'Upload error.'
+    addLog(`✗ Import error: ${err.message}`)
+  } finally {
+    importLoading.value = false
+  }
+}
+
+const handleDownloadTemplate = async () => {
+  try {
+    const res = await downloadAgentTemplate()
+    const url = URL.createObjectURL(new Blob([res], { type: 'text/csv' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'agent_import_template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    addLog(`✗ Template download failed: ${err.message}`)
+  }
+}
+
 // Automatically start simulation preparation
 const startPrepareSimulation = async () => {
   if (!props.simulationId) {
@@ -823,7 +946,8 @@ const startPrepareSimulation = async () => {
     const res = await prepareSimulation({
       simulation_id: props.simulationId,
       use_llm_for_profiles: true,
-      parallel_profile_count: 5
+      parallel_profile_count: 5,
+      skip_profile_generation: importMode.value
     })
     
     if (res.success && res.data) {
@@ -1125,7 +1249,10 @@ onMounted(async () => {
     }
 
     addLog('Step 2 Agent Setup Initializing')
-    startPrepareSimulation()
+    // Only auto-start if not in import mode (import mode waits for file upload)
+    if (!importMode.value) {
+      startPrepareSimulation()
+    }
   }
 })
 
@@ -2673,6 +2800,116 @@ onUnmounted(() => {
 
 .highlight-tip:hover {
   text-decoration: underline;
+}
+
+/* Import mode styles */
+.import-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--color-gray);
+  border: 2px solid rgba(10,10,10,0.08);
+}
+
+.template-link {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #FF6B1A;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  margin-left: auto;
+}
+
+.template-link:hover { opacity: 0.7; }
+
+.import-upload-area {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drop-zone {
+  border: 2px dashed rgba(10,10,10,0.2);
+  padding: 28px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--color-gray);
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.drop-zone.drag-over {
+  border-color: #FF6B1A;
+  background: rgba(255,107,26,0.05);
+}
+
+.drop-zone.has-file {
+  border-color: #43C165;
+  background: rgba(67,193,101,0.05);
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drop-hint {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: rgba(10,10,10,0.5);
+}
+
+.drop-browse {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #FF6B1A;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.drop-filename {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: #0A0A0A;
+}
+
+.drop-filesize {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(10,10,10,0.4);
+}
+
+.import-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #FF4444;
+  margin: 0;
+}
+
+.import-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.import-format-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(10,10,10,0.4);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.import-format-hint code {
+  background: rgba(10,10,10,0.06);
+  padding: 1px 4px;
+  color: rgba(10,10,10,0.6);
 }
 
 @keyframes fadeIn {

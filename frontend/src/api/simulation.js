@@ -226,3 +226,26 @@ export const getInfluenceLeaderboard = (simulationId) => {
   return service.get(`/api/simulation/${simulationId}/influence`)
 }
 
+/**
+ * Import custom agent personas from a CSV or JSON file
+ * @param {string} simulationId
+ * @param {File} file - CSV or JSON file
+ * @returns {Promise<{count: number, preview: Array, warnings: Array}>}
+ */
+export const importAgents = (simulationId, file) => {
+  const formData = new FormData()
+  formData.append('simulation_id', simulationId)
+  formData.append('file', file)
+  return service.post('/api/simulation/agents/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/**
+ * Download CSV template for agent bulk import
+ * @returns {Promise} Blob response containing the CSV template
+ */
+export const downloadAgentTemplate = () => {
+  return service.get('/api/simulation/agents/template', { responseType: 'blob' })
+}
+

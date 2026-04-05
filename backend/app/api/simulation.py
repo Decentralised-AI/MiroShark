@@ -499,6 +499,7 @@ def prepare_simulation():
         entity_types_list = data.get('entity_types')
         use_llm_for_profiles = data.get('use_llm_for_profiles', True)
         parallel_profile_count = data.get('parallel_profile_count', 5)
+        skip_profile_generation = data.get('skip_profile_generation', False)
         
         # ========== Get GraphStorage (capture reference before background task starts) ==========
         storage = current_app.extensions.get('neo4j_storage')
@@ -506,23 +507,37 @@ def prepare_simulation():
             raise ValueError("GraphStorage not initialized — check Neo4j connection")
 
         # ========== Synchronously get entity count (before background task starts) ==========
-        # This allows the frontend to get the expected total Agent count immediately after calling prepare
-        try:
-            logger.info(f"Synchronously fetching entity count: graph_id={state.graph_id}")
-            reader = EntityReader(storage)
-            # Quick entity read (no edge info needed, just counting)
-            filtered_preview = reader.filter_defined_entities(
-                graph_id=state.graph_id,
-                defined_entity_types=entity_types_list,
-                enrich_with_edges=False  # Skip edge info for faster processing
-            )
-            # Save entity count to state (for frontend to fetch immediately)
-            state.entities_count = filtered_preview.filtered_count
-            state.entity_types = list(filtered_preview.entity_types)
-            logger.info(f"Expected entity count: {filtered_preview.filtered_count}, types: {filtered_preview.entity_types}")
-        except Exception as e:
-            logger.warning(f"Failed to synchronously get entity count (will retry in background task): {e}")
-            # Failure does not affect subsequent flow, background task will re-fetch
+        # This allows the frontend to get the expected total Agent count immediately after calling prepare.
+        # When skip_profile_generation is True, profiles are already imported — read count from file.
+        if skip_profile_generation:
+            sim_dir_path = os.path.join(Config.WONDERWALL_SIMULATION_DATA_DIR, simulation_id)
+            reddit_path = os.path.join(sim_dir_path, "reddit_profiles.json")
+            if os.path.exists(reddit_path):
+                try:
+                    with open(reddit_path, 'r', encoding='utf-8') as _f:
+                        _profiles = json.load(_f)
+                    state.entities_count = len(_profiles) if isinstance(_profiles, list) else 0
+                    state.entity_types = ["ImportedAgent"]
+                    logger.info(f"Imported profiles count: {state.entities_count}")
+                except Exception as e:
+                    logger.warning(f"Failed to read imported profiles count: {e}")
+        else:
+            try:
+                logger.info(f"Synchronously fetching entity count: graph_id={state.graph_id}")
+                reader = EntityReader(storage)
+                # Quick entity read (no edge info needed, just counting)
+                filtered_preview = reader.filter_defined_entities(
+                    graph_id=state.graph_id,
+                    defined_entity_types=entity_types_list,
+                    enrich_with_edges=False  # Skip edge info for faster processing
+                )
+                # Save entity count to state (for frontend to fetch immediately)
+                state.entities_count = filtered_preview.filtered_count
+                state.entity_types = list(filtered_preview.entity_types)
+                logger.info(f"Expected entity count: {filtered_preview.filtered_count}, types: {filtered_preview.entity_types}")
+            except Exception as e:
+                logger.warning(f"Failed to synchronously get entity count (will retry in background task): {e}")
+                # Failure does not affect subsequent flow, background task will re-fetch
         
         # Create async task
         task_manager = TaskManager()
@@ -621,7 +636,8 @@ def prepare_simulation():
                     use_llm_for_profiles=use_llm_for_profiles,
                     progress_callback=progress_callback,
                     parallel_profile_count=parallel_profile_count,
-                    storage=storage
+                    storage=storage,
+                    skip_profile_generation=skip_profile_generation,
                 )
                 
                 # Task complete
@@ -666,6 +682,197 @@ def prepare_simulation():
         
     except Exception as e:
         logger.error(f"Failed to start preparation task: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@simulation_bp.route('/agents/template', methods=['GET'])
+def get_agents_template():
+    """
+    Download a CSV template for agent bulk import.
+
+    Returns a CSV file with the correct headers and 3 example rows.
+    """
+    template_rows = [
+        ["name", "username", "bio", "persona", "age", "gender", "mbti", "country", "profession", "interested_topics"],
+        [
+            "Alice Chen", "alice_chen",
+            "Software engineer and open-source enthusiast based in San Francisco.",
+            "Alice is a pragmatic technologist who values evidence-based reasoning. She follows tech policy closely and often engages in debates about AI governance and data privacy. Her communication style is direct and backed by data.",
+            "32", "female", "INTJ", "US", "Software Engineer", "AI ethics;open source;climate tech"
+        ],
+        [
+            "Marcus Rivera", "m_rivera",
+            "Journalist covering science and technology for a national outlet.",
+            "Marcus approaches every story with deep skepticism and a commitment to factual accuracy. He is skeptical of corporate PR framing and tries to center underrepresented voices in his reporting.",
+            "41", "male", "ENTP", "US", "Journalist", "science communication;media;technology policy"
+        ],
+        [
+            "Yuki Tanaka", "yuki_t",
+            "Researcher at a public health institute. Amateur cyclist.",
+            "Yuki combines academic rigor with a community-oriented mindset. She is cautious about overstating findings and tends to hedge claims. She engages constructively even with people she disagrees with.",
+            "28", "female", "INFJ", "Japan", "Public Health Researcher", "epidemiology;cycling;urban planning"
+        ],
+    ]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerows(template_rows)
+    csv_bytes = io.BytesIO(output.getvalue().encode('utf-8'))
+    return send_file(
+        csv_bytes,
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name='agent_import_template.csv'
+    )
+
+
+@simulation_bp.route('/agents/import', methods=['POST'])
+def import_simulation_agents():
+    """
+    Import custom agent personas from a CSV or JSON file.
+
+    Writes reddit_profiles.json and twitter_profiles.csv to the simulation directory.
+    Call /prepare with skip_profile_generation=true afterwards to generate only the
+    simulation config (skipping LLM profile generation).
+
+    Request:
+        multipart/form-data:
+            - simulation_id: str  (required)
+            - file: CSV or JSON file (required)
+              CSV columns: name, username, bio, persona (required);
+                           age, gender, mbti, country, profession, interested_topics (optional)
+              JSON: array of objects with the same fields.
+
+    Returns:
+        { success: true, data: { count: N, preview: [...first 5 agents...] } }
+    """
+    try:
+        simulation_id = request.form.get('simulation_id')
+        if not simulation_id:
+            return jsonify({"success": False, "error": "simulation_id is required"}), 400
+
+        if 'file' not in request.files:
+            return jsonify({"success": False, "error": "file is required"}), 400
+
+        uploaded_file = request.files['file']
+        filename = uploaded_file.filename or ''
+        file_bytes = uploaded_file.read()
+
+        # ── Parse uploaded file ──
+        raw_agents = []
+        if filename.lower().endswith('.json'):
+            import json as _json
+            try:
+                raw_agents = _json.loads(file_bytes.decode('utf-8'))
+                if not isinstance(raw_agents, list):
+                    return jsonify({"success": False, "error": "JSON file must contain an array of agent objects"}), 400
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Invalid JSON: {e}"}), 400
+        elif filename.lower().endswith('.csv'):
+            import csv as _csv
+            reader = _csv.DictReader(io.StringIO(file_bytes.decode('utf-8')))
+            for row in reader:
+                raw_agents.append(dict(row))
+        else:
+            return jsonify({"success": False, "error": "Unsupported file type — upload a .csv or .json file"}), 400
+
+        if not raw_agents:
+            return jsonify({"success": False, "error": "File contains no agent rows"}), 400
+
+        # ── Validate and build OasisAgentProfile objects ──
+        from ..services.oasis_profile_generator import OasisAgentProfile
+        profiles = []
+        errors = []
+        for i, row in enumerate(raw_agents):
+            missing = [f for f in ('name', 'username', 'bio', 'persona') if not row.get(f, '').strip()]
+            if missing:
+                errors.append(f"Row {i + 1}: missing required field(s): {', '.join(missing)}")
+                continue
+
+            # Parse interested_topics — accept semicolon or comma separated string, or list
+            topics_raw = row.get('interested_topics', '')
+            if isinstance(topics_raw, list):
+                topics = [t.strip() for t in topics_raw if t.strip()]
+            else:
+                sep = ';' if ';' in str(topics_raw) else ','
+                topics = [t.strip() for t in str(topics_raw).split(sep) if t.strip()]
+
+            age_val = None
+            try:
+                if row.get('age'):
+                    age_val = int(row['age'])
+            except (ValueError, TypeError):
+                pass
+
+            profile = OasisAgentProfile(
+                user_id=i,
+                user_name=row['username'].strip(),
+                name=row['name'].strip(),
+                bio=row['bio'].strip(),
+                persona=row['persona'].strip(),
+                age=age_val,
+                gender=row.get('gender', '').strip() or None,
+                mbti=row.get('mbti', '').strip() or None,
+                country=row.get('country', '').strip() or None,
+                profession=row.get('profession', '').strip() or None,
+                interested_topics=topics,
+            )
+            profiles.append(profile)
+
+        if not profiles:
+            return jsonify({
+                "success": False,
+                "error": f"No valid agents found. Validation errors: {'; '.join(errors[:5])}"
+            }), 400
+
+        # ── Ensure simulation exists ──
+        manager = SimulationManager()
+        state = manager.get_simulation(simulation_id)
+        if not state:
+            return jsonify({"success": False, "error": f"Simulation not found: {simulation_id}"}), 404
+
+        sim_dir = os.path.join(Config.WONDERWALL_SIMULATION_DATA_DIR, simulation_id)
+        os.makedirs(sim_dir, exist_ok=True)
+
+        # ── Write profile files ──
+        from ..services.oasis_profile_generator import OasisProfileGenerator
+        gen = OasisProfileGenerator.__new__(OasisProfileGenerator)  # no LLM client needed
+        gen.save_profiles(
+            profiles=profiles,
+            file_path=os.path.join(sim_dir, "reddit_profiles.json"),
+            platform="reddit"
+        )
+        gen.save_profiles(
+            profiles=profiles,
+            file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
+            platform="twitter"
+        )
+        if state.enable_polymarket:
+            gen.save_profiles(
+                profiles=profiles,
+                file_path=os.path.join(sim_dir, "polymarket_profiles.json"),
+                platform="polymarket"
+            )
+
+        # ── Build preview (first 5 agents) ──
+        preview = [p.to_reddit_format() for p in profiles[:5]]
+
+        logger.info(f"Imported {len(profiles)} agent personas into simulation {simulation_id}")
+        return jsonify({
+            "success": True,
+            "data": {
+                "count": len(profiles),
+                "preview": preview,
+                "warnings": errors[:10] if errors else [],
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Agent import failed: {e}")
         return jsonify({
             "success": False,
             "error": str(e),

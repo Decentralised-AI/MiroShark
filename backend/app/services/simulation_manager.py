@@ -14,7 +14,7 @@ from enum import Enum
 
 from ..config import Config
 from ..utils.logger import get_logger
-from .entity_reader import EntityReader, FilteredEntities
+from .entity_reader import EntityReader, EntityNode, FilteredEntities
 from .oasis_profile_generator import OasisProfileGenerator, OasisAgentProfile
 from .simulation_config_generator import SimulationConfigGenerator, SimulationParameters
 
@@ -242,6 +242,7 @@ class SimulationManager:
         progress_callback: Optional[callable] = None,
         parallel_profile_count: int = 3,
         storage: 'GraphStorage' = None,
+        skip_profile_generation: bool = False,
     ) -> SimulationState:
         """
         Prepare simulation environment (fully automated)
@@ -275,130 +276,167 @@ class SimulationManager:
 
             sim_dir = self._get_simulation_dir(simulation_id)
 
-            # ========== Phase 1: Read and filter entities ==========
-            if progress_callback:
-                progress_callback("reading", 0, "Connecting to graph...")
-
-            if not storage:
-                raise ValueError("storage (GraphStorage) is required for prepare_simulation")
-            reader = EntityReader(storage)
-
-            if progress_callback:
-                progress_callback("reading", 30, "Reading node data...")
-            
-            filtered = reader.filter_defined_entities(
-                graph_id=state.graph_id,
-                defined_entity_types=defined_entity_types,
-                enrich_with_edges=True
-            )
-            
-            state.entities_count = filtered.filtered_count
-            state.entity_types = list(filtered.entity_types)
-            
-            if progress_callback:
-                progress_callback(
-                    "reading", 100,
-                    f"Done, {filtered.filtered_count} entities in total",
-                    current=filtered.filtered_count,
-                    total=filtered.filtered_count
-                )
-
-            if filtered.filtered_count == 0:
-                state.status = SimulationStatus.FAILED
-                state.error = "No matching entities found, please check if the graph is built correctly"
-                self._save_simulation_state(state)
-                return state
-            
-            # ========== Phase 2: Generate Agent Profiles ==========
-            total_entities = len(filtered.entities)
-
-            if progress_callback:
-                progress_callback(
-                    "generating_profiles", 0,
-                    "Starting generation...",
-                    current=0,
-                    total=total_entities
-                )
-
-            # Pass graph_id to enable graph retrieval for richer context
-            generator = OasisProfileGenerator(
-                storage=storage,
-                graph_id=state.graph_id,
-                simulation_requirement=simulation_requirement,
-            )
-            
-            def profile_progress(current, total, msg):
+            if skip_profile_generation:
+                # ========== Imported profiles: skip entity reading and profile generation ==========
+                # Profiles were already written by the /agents/import endpoint.
+                # Build minimal stub EntityNode objects from the existing reddit_profiles.json
+                # so that config generation has the entity names and counts it needs.
                 if progress_callback:
                     progress_callback(
-                        "generating_profiles", 
-                        int(current / total * 100), 
-                        msg,
-                        current=current,
-                        total=total,
-                        item_name=msg
+                        "generating_profiles", 100,
+                        "Using imported agent profiles — skipping LLM generation",
+                        current=0, total=0
                     )
-            
-            # Set real-time save file path (prefer Reddit JSON format)
-            realtime_output_path = None
-            realtime_platform = "reddit"
-            if state.enable_reddit:
-                realtime_output_path = os.path.join(sim_dir, "reddit_profiles.json")
-                realtime_platform = "reddit"
-            elif state.enable_twitter:
-                realtime_output_path = os.path.join(sim_dir, "twitter_profiles.csv")
-                realtime_platform = "twitter"
-            
-            profiles = generator.generate_profiles_from_entities(
-                entities=filtered.entities,
-                use_llm=use_llm_for_profiles,
-                progress_callback=profile_progress,
-                graph_id=state.graph_id,  # Pass graph_id for graph retrieval
-                parallel_count=parallel_profile_count,  # Parallel generation count
-                realtime_output_path=realtime_output_path,  # Real-time save path
-                output_platform=realtime_platform  # Output format
-            )
-            
-            state.profiles_count = len(profiles)
-            
-            # Save Profile files (note: Twitter uses CSV format, Reddit uses JSON format)
-            # Reddit profiles were already saved in real-time during generation; save again here to ensure completeness
-            if progress_callback:
-                progress_callback(
-                    "generating_profiles", 95,
-                    "Saving Profile files...",
-                    current=total_entities,
-                    total=total_entities
-                )
-            
-            if state.enable_reddit:
-                generator.save_profiles(
-                    profiles=profiles,
-                    file_path=os.path.join(sim_dir, "reddit_profiles.json"),
-                    platform="reddit"
-                )
-            
-            if state.enable_twitter:
-                # Twitter uses CSV format! This is an OASIS requirement
-                generator.save_profiles(
-                    profiles=profiles,
-                    file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
-                    platform="twitter"
+
+                reddit_profiles_path = os.path.join(sim_dir, "reddit_profiles.json")
+                stub_entities = []
+                if os.path.exists(reddit_profiles_path):
+                    import json as _json
+                    with open(reddit_profiles_path, 'r', encoding='utf-8') as _f:
+                        _imported = _json.load(_f)
+                    for _p in _imported:
+                        stub_entities.append(EntityNode(
+                            uuid=f"imported_{_p.get('user_id', len(stub_entities))}",
+                            name=_p.get('name', _p.get('username', 'Agent')),
+                            labels=["ImportedAgent"],
+                            summary=_p.get('bio', ''),
+                            attributes={
+                                "profession": _p.get('profession', ''),
+                                "country": _p.get('country', ''),
+                            }
+                        ))
+
+                filtered_entities = stub_entities
+                state.entities_count = len(filtered_entities)
+                state.entity_types = ["ImportedAgent"]
+                state.profiles_count = len(filtered_entities)
+            else:
+                # ========== Phase 1: Read and filter entities ==========
+                if progress_callback:
+                    progress_callback("reading", 0, "Connecting to graph...")
+
+                if not storage:
+                    raise ValueError("storage (GraphStorage) is required for prepare_simulation")
+                reader = EntityReader(storage)
+
+                if progress_callback:
+                    progress_callback("reading", 30, "Reading node data...")
+
+                filtered = reader.filter_defined_entities(
+                    graph_id=state.graph_id,
+                    defined_entity_types=defined_entity_types,
+                    enrich_with_edges=True
                 )
 
-            if state.enable_polymarket:
-                generator.save_profiles(
-                    profiles=profiles,
-                    file_path=os.path.join(sim_dir, "polymarket_profiles.json"),
-                    platform="polymarket"
+                state.entities_count = filtered.filtered_count
+                state.entity_types = list(filtered.entity_types)
+
+                if progress_callback:
+                    progress_callback(
+                        "reading", 100,
+                        f"Done, {filtered.filtered_count} entities in total",
+                        current=filtered.filtered_count,
+                        total=filtered.filtered_count
+                    )
+
+                if filtered.filtered_count == 0:
+                    state.status = SimulationStatus.FAILED
+                    state.error = "No matching entities found, please check if the graph is built correctly"
+                    self._save_simulation_state(state)
+                    return state
+
+                # ========== Phase 2: Generate Agent Profiles ==========
+                total_entities = len(filtered.entities)
+
+                if progress_callback:
+                    progress_callback(
+                        "generating_profiles", 0,
+                        "Starting generation...",
+                        current=0,
+                        total=total_entities
+                    )
+
+                # Pass graph_id to enable graph retrieval for richer context
+                generator = OasisProfileGenerator(
+                    storage=storage,
+                    graph_id=state.graph_id,
+                    simulation_requirement=simulation_requirement,
                 )
-            
-            if progress_callback:
-                progress_callback(
-                    "generating_profiles", 100,
-                    f"Done, {len(profiles)} Profiles in total",
-                    current=len(profiles),
-                    total=len(profiles)
+
+                def profile_progress(current, total, msg):
+                    if progress_callback:
+                        progress_callback(
+                            "generating_profiles",
+                            int(current / total * 100),
+                            msg,
+                            current=current,
+                            total=total,
+                            item_name=msg
+                        )
+
+                # Set real-time save file path (prefer Reddit JSON format)
+                realtime_output_path = None
+                realtime_platform = "reddit"
+                if state.enable_reddit:
+                    realtime_output_path = os.path.join(sim_dir, "reddit_profiles.json")
+                    realtime_platform = "reddit"
+                elif state.enable_twitter:
+                    realtime_output_path = os.path.join(sim_dir, "twitter_profiles.csv")
+                    realtime_platform = "twitter"
+
+                profiles = generator.generate_profiles_from_entities(
+                    entities=filtered.entities,
+                    use_llm=use_llm_for_profiles,
+                    progress_callback=profile_progress,
+                    graph_id=state.graph_id,  # Pass graph_id for graph retrieval
+                    parallel_count=parallel_profile_count,  # Parallel generation count
+                    realtime_output_path=realtime_output_path,  # Real-time save path
+                    output_platform=realtime_platform  # Output format
                 )
+
+                state.profiles_count = len(profiles)
+
+                # Save Profile files (note: Twitter uses CSV format, Reddit uses JSON format)
+                # Reddit profiles were already saved in real-time during generation; save again here to ensure completeness
+                if progress_callback:
+                    progress_callback(
+                        "generating_profiles", 95,
+                        "Saving Profile files...",
+                        current=total_entities,
+                        total=total_entities
+                    )
+
+                if state.enable_reddit:
+                    generator.save_profiles(
+                        profiles=profiles,
+                        file_path=os.path.join(sim_dir, "reddit_profiles.json"),
+                        platform="reddit"
+                    )
+
+                if state.enable_twitter:
+                    # Twitter uses CSV format! This is an OASIS requirement
+                    generator.save_profiles(
+                        profiles=profiles,
+                        file_path=os.path.join(sim_dir, "twitter_profiles.csv"),
+                        platform="twitter"
+                    )
+
+                if state.enable_polymarket:
+                    generator.save_profiles(
+                        profiles=profiles,
+                        file_path=os.path.join(sim_dir, "polymarket_profiles.json"),
+                        platform="polymarket"
+                    )
+
+                if progress_callback:
+                    progress_callback(
+                        "generating_profiles", 100,
+                        f"Done, {len(profiles)} Profiles in total",
+                        current=len(profiles),
+                        total=len(profiles)
+                    )
+
+                filtered_entities = filtered.entities
 
             # ========== Phase 3: LLM-powered simulation config generation ==========
             if progress_callback:
@@ -425,7 +463,7 @@ class SimulationManager:
                 graph_id=state.graph_id,
                 simulation_requirement=simulation_requirement,
                 document_text=document_text,
-                entities=filtered.entities,
+                entities=filtered_entities,
                 enable_twitter=state.enable_twitter,
                 enable_reddit=state.enable_reddit
             )
