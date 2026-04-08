@@ -7,13 +7,16 @@ Note: Each call spawns a subprocess (~2-5s overhead), so this is best
 suited for low-volume workloads (report generation, small simulations).
 """
 
+import inspect
 import json
 import os
 import re
 import subprocess
+import time
 from typing import Optional, Dict, Any, List
 
 from .logger import get_logger
+from .event_logger import EventLogger, LOG_PROMPTS
 
 logger = get_logger('miroshark.claude_code_client')
 
@@ -107,6 +110,7 @@ class ClaudeCodeClient:
 
         logger.debug(f"Calling claude -p ({len(prompt)} chars)")
 
+        t0 = time.perf_counter()
         try:
             result = subprocess.run(
                 cmd,
@@ -114,14 +118,17 @@ class ClaudeCodeClient:
                 text=True,
                 timeout=self.timeout
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            self._emit_event(messages, None, t0, error=exc)
             raise TimeoutError(
                 f"Claude Code call timed out after {self.timeout}s"
             )
 
         if result.returncode != 0:
             error_msg = result.stderr.strip() or "Unknown error"
-            raise RuntimeError(f"Claude Code CLI error: {error_msg}")
+            err = RuntimeError(f"Claude Code CLI error: {error_msg}")
+            self._emit_event(messages, None, t0, error=err)
+            raise err
 
         # Parse the JSON output from claude --output-format json
         try:
@@ -134,7 +141,37 @@ class ClaudeCodeClient:
         # Strip <think> tags (same as LLMClient)
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
 
+        self._emit_event(messages, content, t0)
         return content
+
+    def _emit_event(self, messages, content, t0, *, error=None):
+        """Emit an llm_call observability event (best-effort)."""
+        try:
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            caller = 'unknown'
+            for frame_info in inspect.stack()[2:6]:
+                mod = frame_info.filename
+                if 'claude_code_client' not in mod and 'llm_client' not in mod:
+                    caller = f'{os.path.splitext(os.path.basename(mod))[0]}.{frame_info.function}'
+                    break
+
+            data = {
+                'caller': caller,
+                'model': self.model or 'claude-code',
+                'temperature': None,
+                'tokens_input': None,
+                'tokens_output': None,
+                'tokens_total': None,
+                'latency_ms': latency_ms,
+                'response_preview': (content or '')[:200] if content else None,
+                'error': str(error) if error else None,
+            }
+            if LOG_PROMPTS:
+                data['messages'] = messages
+                data['response'] = content
+            EventLogger().emit('llm_call', data)
+        except Exception:
+            pass
 
     def chat_json(
         self,

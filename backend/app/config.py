@@ -89,6 +89,10 @@ class Config:
     # for grounded search, or "perplexity/sonar" for fast search). If empty, uses default LLM.
     WEB_SEARCH_MODEL = os.environ.get('WEB_SEARCH_MODEL', '')
 
+    # Observability configuration
+    MIROSHARK_LOG_PROMPTS = os.environ.get('MIROSHARK_LOG_PROMPTS', 'false').lower() == 'true'
+    MIROSHARK_LOG_LEVEL = os.environ.get('MIROSHARK_LOG_LEVEL', 'info')  # debug|info|warn
+
     # Report Agent configuration
     REPORT_AGENT_MAX_TOOL_CALLS = int(os.environ.get('REPORT_AGENT_MAX_TOOL_CALLS', '5'))
     REPORT_AGENT_MAX_REFLECTION_ROUNDS = int(os.environ.get('REPORT_AGENT_MAX_REFLECTION_ROUNDS', '2'))

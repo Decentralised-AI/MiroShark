@@ -15,6 +15,7 @@ Log structure:
 import json
 import os
 import logging
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -201,6 +202,43 @@ class SimulationLogManager:
     
     def debug(self, message: str):
         self.log(message, "debug")
+
+
+# ============ Unified event helpers (subprocess-safe) ============
+
+def write_simulation_event(
+    sim_dir: str,
+    event_type: str,
+    data: Dict[str, Any],
+    *,
+    simulation_id: Optional[str] = None,
+    round_num: Optional[int] = None,
+    agent_id: Optional[int] = None,
+    agent_name: Optional[str] = None,
+    platform: Optional[str] = None,
+):
+    """Append a unified observability event to {sim_dir}/events.jsonl.
+
+    This is safe to call from the simulation subprocess — no Flask dependency.
+    """
+    event = {
+        'event_id': f'evt_{uuid.uuid4().hex[:12]}',
+        'event_type': event_type,
+        'timestamp': datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
+        'simulation_id': simulation_id,
+        'trace_id': None,
+        'round_num': round_num,
+        'agent_id': agent_id,
+        'agent_name': agent_name,
+        'platform': platform,
+        'data': data,
+    }
+    path = os.path.join(sim_dir, 'events.jsonl')
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(event, ensure_ascii=False, default=str) + '\n')
+    except Exception:
+        pass  # never break simulation for logging
 
 
 # ============ Legacy interface compatibility ============

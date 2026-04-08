@@ -159,7 +159,7 @@ def init_logging_for_simulation(simulation_dir: str):
         shutil.rmtree(old_log_dir, ignore_errors=True)
 
 
-from action_logger import SimulationLogManager, PlatformActionLogger
+from action_logger import SimulationLogManager, PlatformActionLogger, write_simulation_event
 from cross_platform_digest import CrossPlatformLog, inject_cross_platform_context
 from belief_integration import BeliefTracker
 from market_media_bridge import (
@@ -1318,10 +1318,19 @@ async def run_twitter_simulation(
         if action_logger:
             action_logger.log_round_start(round_num + 1, simulated_hour)
 
+        _sim_id = config.get('simulation_id')
+        write_simulation_event(simulation_dir, 'round_boundary', {
+            'boundary': 'start', 'simulated_hour': simulated_hour,
+            'simulated_day': simulated_day, 'active_agents': len(active_agents),
+        }, simulation_id=_sim_id, round_num=round_num + 1, platform='twitter')
+
         if not active_agents:
             # Also log round end when no active agents (actions_count=0)
             if action_logger:
                 action_logger.log_round_end(round_num + 1, 0)
+            write_simulation_event(simulation_dir, 'round_boundary', {
+                'boundary': 'end', 'actions_count': 0, 'elapsed_ms': 0,
+            }, simulation_id=_sim_id, round_num=round_num + 1, platform='twitter')
             continue
 
         # Inject cross-platform digest into active agents' system messages
@@ -1340,6 +1349,7 @@ async def run_twitter_simulation(
                 for _, agent in active_agents:
                     inject_market_context(agent, market_prompt)
 
+        _round_t0 = datetime.now()
         actions = {agent: LLMAction() for _, agent in active_agents}
         await result.env.step(actions)
 
@@ -1376,6 +1386,12 @@ async def run_twitter_simulation(
 
         if action_logger:
             action_logger.log_round_end(round_num + 1, round_action_count)
+
+        _round_elapsed = int((datetime.now() - _round_t0).total_seconds() * 1000)
+        write_simulation_event(simulation_dir, 'round_boundary', {
+            'boundary': 'end', 'actions_count': round_action_count,
+            'elapsed_ms': _round_elapsed,
+        }, simulation_id=_sim_id, round_num=round_num + 1, platform='twitter')
 
         if (round_num + 1) % 20 == 0:
             progress = (round_num + 1) / total_rounds * 100

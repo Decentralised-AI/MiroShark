@@ -173,20 +173,93 @@ class SocialAgent(ChatAgent):
                 f"Agent {self.social_agent_id} observing environment: "
                 f"{env_prompt}")
             response = await self.astep(user_msg)
+            tool_calls_data = []
             for tool_call in response.info['tool_calls']:
                 action_name = tool_call.tool_name
                 args = tool_call.args
                 agent_log.info(f"Agent {self.social_agent_id} performed "
                                f"action: {action_name} with args: {args}")
+                tool_calls_data.append({
+                    'tool_name': action_name,
+                    'args': args,
+                    'result': str(tool_call.result)[:200] if tool_call.result else None,
+                })
                 if action_name not in ALL_SOCIAL_ACTIONS:
                     agent_log.info(
                         f"Agent {self.social_agent_id} get the result: "
                         f"{tool_call.result}")
 
+                # Emit agent_decision event (best-effort, never breaks agent)
+                try:
+                    self._emit_decision_event(env_prompt, response, tool_calls_data)
+                except Exception:
+                    pass
+
                 return response
         except Exception as e:
             agent_log.error(f"Agent {self.social_agent_id} error: {e}")
+            # Emit error event
+            try:
+                self._emit_decision_event(env_prompt, None, [], error=e)
+            except Exception:
+                pass
             return e
+
+    def _emit_decision_event(self, env_prompt, response, tool_calls_data, error=None):
+        """Emit an agent_decision observability event to events.jsonl (best-effort)."""
+        try:
+            import os as _os
+            import json as _json
+            import uuid as _uuid
+            from datetime import datetime as _dt
+
+            log_prompts = _os.environ.get('MIROSHARK_LOG_PROMPTS', 'false').lower() == 'true'
+
+            llm_response_text = None
+            if response and hasattr(response, 'msgs') and response.msgs:
+                llm_response_text = response.msgs[0].content if response.msgs else None
+            elif response and hasattr(response, 'output_messages') and response.output_messages:
+                llm_response_text = response.output_messages[0].content
+
+            parsed_action = None
+            if tool_calls_data:
+                parsed_action = {
+                    'action_type': tool_calls_data[0].get('tool_name'),
+                    'action_args': tool_calls_data[0].get('args'),
+                }
+
+            data = {
+                'env_prompt_preview': (env_prompt or '')[:300],
+                'llm_response_preview': (llm_response_text or '')[:300],
+                'parsed_action': parsed_action,
+                'tool_calls': tool_calls_data,
+                'success': error is None,
+                'error': str(error) if error else None,
+            }
+            if log_prompts:
+                data['env_prompt'] = env_prompt
+                data['llm_response'] = llm_response_text
+
+            event = {
+                'event_id': f'evt_{_uuid.uuid4().hex[:12]}',
+                'event_type': 'agent_decision',
+                'timestamp': _dt.utcnow().isoformat(timespec='milliseconds') + 'Z',
+                'simulation_id': None,
+                'trace_id': None,
+                'round_num': None,
+                'agent_id': self.social_agent_id,
+                'agent_name': getattr(self.user_info, 'name', None),
+                'platform': None,
+                'data': data,
+            }
+
+            # Try to find the simulation events.jsonl via CWD or env
+            sim_dir = _os.environ.get('MIROSHARK_SIM_DIR', '.')
+            events_path = _os.path.join(sim_dir, 'events.jsonl')
+            with open(events_path, 'a', encoding='utf-8') as f:
+                f.write(_json.dumps(event, ensure_ascii=False, default=str) + '\n')
+        except Exception:
+            pass  # never break agent execution
 
     async def perform_test(self):
         """

@@ -4,13 +4,17 @@ Unified API calls using OpenAI format.
 Supports OpenAI-compatible APIs and Claude Code CLI.
 """
 
+import inspect
 import json
 import os
 import re
+import time
 from typing import Optional, Dict, Any, List
 from openai import OpenAI
 
 from ..config import Config
+from .event_logger import EventLogger, LOG_PROMPTS
+from .trace_context import TraceContext
 
 
 def create_llm_client(
@@ -87,6 +91,46 @@ class LLMClient:
         """Check if we're talking to an Ollama server."""
         return '11434' in (self.base_url or '')
 
+    def _emit_llm_event(self, messages, content, t0, *, response=None, error=None, temperature=0.7):
+        """Emit an llm_call observability event (best-effort, never raises)."""
+        try:
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+            # Caller context: walk up the stack to find the first frame outside this file
+            caller = 'unknown'
+            for frame_info in inspect.stack()[2:6]:
+                mod = frame_info.filename
+                if 'llm_client' not in mod and 'claude_code_client' not in mod:
+                    module_name = os.path.splitext(os.path.basename(mod))[0]
+                    caller = f'{module_name}.{frame_info.function}'
+                    break
+
+            # Token counts from OpenAI response
+            tokens_input = tokens_output = tokens_total = None
+            if response and hasattr(response, 'usage') and response.usage:
+                tokens_input = getattr(response.usage, 'prompt_tokens', None)
+                tokens_output = getattr(response.usage, 'completion_tokens', None)
+                tokens_total = getattr(response.usage, 'total_tokens', None)
+
+            data = {
+                'caller': caller,
+                'model': self.model,
+                'temperature': temperature,
+                'tokens_input': tokens_input,
+                'tokens_output': tokens_output,
+                'tokens_total': tokens_total,
+                'latency_ms': latency_ms,
+                'response_preview': (content or '')[:200] if content else None,
+                'error': str(error) if error else None,
+            }
+
+            if LOG_PROMPTS:
+                data['messages'] = messages
+                data['response'] = content
+            EventLogger().emit('llm_call', data)
+        except Exception:
+            pass  # observability must never break LLM calls
+
     def chat(
         self,
         messages: List[Dict[str, str]],
@@ -122,10 +166,20 @@ class LLMClient:
                 "options": {"num_ctx": self._num_ctx}
             }
 
-        response = self.client.chat.completions.create(**kwargs)
+        t0 = time.perf_counter()
+        error_info = None
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            error_info = exc
+            self._emit_llm_event(messages, None, t0, error=exc, temperature=temperature)
+            raise
+
         content = response.choices[0].message.content
         # Some models (e.g., MiniMax M2.5) include <think> reasoning content in the content field, which needs to be removed
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+
+        self._emit_llm_event(messages, content, t0, response=response, temperature=temperature)
         return content
 
     def chat_json(

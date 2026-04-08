@@ -475,6 +475,7 @@ class SimulationRunner:
             env = os.environ.copy()
             env['PYTHONUTF8'] = '1'  # Python 3.7+ support, makes all open() default to UTF-8
             env['PYTHONIOENCODING'] = 'utf-8'  # Ensure stdout/stderr use UTF-8
+            env['MIROSHARK_SIM_DIR'] = sim_dir  # Observability: tell agents where to write events.jsonl
             
             # Set working directory to simulation directory (database files etc. will be generated here)
             # Use start_new_session=True to create new process group, ensuring all child processes can be terminated via os.killpg
