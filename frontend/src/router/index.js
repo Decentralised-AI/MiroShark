@@ -48,6 +48,12 @@ const routes = [
     name: 'Compare',
     component: () => import('../views/ComparisonView.vue'),
     props: true
+  },
+  {
+    path: '/share/:token',
+    name: 'Share',
+    component: () => import('../views/ShareView.vue'),
+    props: true
   }
 ]
 

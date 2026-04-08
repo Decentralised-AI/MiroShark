@@ -243,3 +243,21 @@ export const getInfluenceLeaderboard = (simulationId) => {
   return service.get(`/api/simulation/${simulationId}/influence`)
 }
 
+/**
+ * Create a public share link for a simulation
+ * @param {string} simulationId
+ * @returns {Promise<{token: string, share_url: string, reused: boolean}>}
+ */
+export const createShare = (simulationId) => {
+  return service.post(`/api/share/${simulationId}`)
+}
+
+/**
+ * Fetch public simulation data for a share token
+ * @param {string} token - 8-char share token
+ * @returns {Promise<Object>} Public simulation data
+ */
+export const getShare = (token) => {
+  return service.get(`/api/share/${token}`)
+}
+

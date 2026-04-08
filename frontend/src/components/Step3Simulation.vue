@@ -50,6 +50,19 @@
         ◈ Influence
       </button>
 
+      <!-- Share Simulation -->
+      <button
+        v-if="allActions.length > 0"
+        class="action-btn secondary"
+        :class="{ active: shareToast }"
+        :disabled="isSharing"
+        @click="handleShare"
+        title="Copy shareable link to clipboard"
+      >
+        <span v-if="isSharing" class="loading-spinner-small"></span>
+        {{ shareToast ? '✓ Link copied!' : '↗ Share' }}
+      </button>
+
       <!-- Resume (when paused/stopped/failed with partial data) -->
       <button
         v-if="phase === 2 && hasPartialData"
@@ -415,7 +428,8 @@ import {
   stopSimulation,
   resumeSimulation,
   getRunStatus,
-  getRunStatusDetail
+  getRunStatusDetail,
+  createShare
 } from '../api/simulation'
 import { generateReport } from '../api/report'
 import InfluenceLeaderboard from './InfluenceLeaderboard.vue'
@@ -452,9 +466,29 @@ const monitorCollapsed = ref(false)
 const filteredAgent = ref(null)
 const filteredPlatform = ref(null)
 const showInfluence = ref(false)
+const isSharing = ref(false)
+const shareToast = ref(false)
 
 const filterByAgent = (agentName) => {
   filteredAgent.value = filteredAgent.value === agentName ? null : agentName
+}
+
+const handleShare = async () => {
+  if (isSharing.value) return
+  isSharing.value = true
+  try {
+    const resp = await createShare(props.simulationId)
+    if (resp.data.success) {
+      const shareUrl = window.location.origin + resp.data.data.share_url
+      await navigator.clipboard.writeText(shareUrl)
+      shareToast.value = true
+      setTimeout(() => { shareToast.value = false }, 2500)
+    }
+  } catch (err) {
+    console.error('Share failed:', err)
+  } finally {
+    isSharing.value = false
+  }
 }
 
 const clearAgentFilter = () => {
